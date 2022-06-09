@@ -68,6 +68,6 @@ data(dataHNB)     # Load dataset
 # autocorr.plot(result$plot[[3]])    # Generate ACF Plot
 # plot(result$plot[[3]])             # Generate Density and Trace plot
 
-## For data with non-sampled area use dataHNBNs
+## For data with non-sampled area use dataHNBNS
 
 }

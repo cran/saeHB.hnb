@@ -33,7 +33,7 @@
 #' # autocorr.plot(result$plot[[3]])    # Generate ACF Plot
 #' # plot(result$plot[[3]])             # Generate Density and Trace plot
 #'
-#' ## For data with non-sampled area use dataHNBNs
+#' ## For data with non-sampled area use dataHNBNS
 #'
 #' @import stats
 #' @import rjags
@@ -113,43 +113,49 @@ HurdleNB <- function(formula,iter.update=3, iter.mcmc=2000,
     tau.ua = tau.ub = 1
     tau.va = tau.vb = 1
     a.var.u = a.var.v = 1
-    alpha = 1
+    tau.aa = tau.ab = 0.001
+    tau.ba = tau.bb = 0.001
 
     for (i in 1:iter.update){
       dat <- list("n"= n,  "nvar"= nvar, "zeros"= rep(0,n), "y" = formuladata[,1], "x"=as.matrix(x[,-1]),
                   "mu.b"=mu.b,"mu.g"=mu.g, "tau.b"=tau.b, "tau.g"=tau.g,
-                  "tau.ua"=tau.ua, "tau.ub"=tau.ub, "tau.va"=tau.va, "tau.vb"=tau.vb)
+                  "tau.ua"=tau.ua, "tau.ub"=tau.ub, "tau.va"=tau.va, "tau.vb"=tau.vb,
+                  "tau.aa"=tau.aa, "tau.ab"=tau.ab, "tau.ba"=tau.ba, "tau.bb"=tau.bb)
+
       inits <- list(u = rep(0, n), v = rep(0, n), b = mu.b, g = mu.g,
-                    tau.u = tau.u, tau.v = tau.v, alpha = alpha)
+                    tau.u = tau.u, tau.v = tau.v, tau.ad=0.001, tau.bd=0.001)
 
       cat("model{
        #Likelihood using zero trick
           for (i in 1:n){
               zeros[i] ~ dpois(zeros.mean[i])
-              zeros.mean[i] <- -ll[i] + 10000
+              zeros.mean[i] <- -ll[i] + 1000000
               B[i] ~ dbern(phi[i])
 
-              logztnb[i] <- loggam(y[i]+1/alpha)
+              logztnb[i] <- loggam(y[i]+alpha[i])
                             - loggam(y[i]+1)
-                            - loggam(1/alpha)
-                            + y[i]*log(1-1/(1+alpha*mu[i]))
-                            + 1/alpha*(log(1/(1+alpha*mu[i])))
-                            - log(1-(1+alpha*mu[i])^(-1/alpha))
+                            - loggam(alpha[i])
+                            + y[i]*(log(mu[i])-log(mu[i]+alpha[i]))
+                            + alpha[i]*(log(alpha[i])-log(mu[i]+alpha[i]))
+                            + log((1-(alpha[i]/(mu[i]+alpha[i]))^alpha[i])^(-1))
+
 
               z[i]  <- step(y[i] - 0.0001)
-              l1[i] <- (1 - z[i])*log(1-phi[i])
-              l2[i] <- z[i]*(log(phi[i]) + logztnb[i])
-              ll[i] <- l1[i] + l2[i]
+              l1[i] <- (1 - z[i])*log(phi[i])
+              l2[i] <- z[i]*(log(1-phi[i]) + logztnb[i])
+              ll[i] <- l1[i] + l2[i]            #ini likelihood yang akhir ada di jurnal :')
 
               #Model regresi
-              log(mu[i])    <- b[1] + sum(b[2:nvar]*x[i,]) + u[i]
+              log(mu[i])   <- b[1] + sum(b[2:nvar]*x[i,]) + u[i]
               logit(phi[i]) <- g[1] + sum(g[2:nvar]*x[i,]) + v[i]
 
-              mu.exp[i] <- mu[i]*phi[i]*(1-(1+alpha*mu[i])^(-1/alpha))
+              mu.exp[i] <- mu[i]*(1-phi[i])*(1-(alpha[i]/(mu[i]+alpha[i]))^alpha[i])^(-1)
 
               #Random effect area
               u[i] ~ dnorm(0,tau.u)
               v[i] ~ dnorm(0,tau.v)
+
+              alpha[i] ~ dgamma(tau.ad, tau.bd)
           }
 
           #Priors
@@ -157,7 +163,7 @@ HurdleNB <- function(formula,iter.update=3, iter.mcmc=2000,
 					    b[k] ~ dnorm(mu.b[k],tau.b[k])
 					    g[k] ~ dnorm(mu.g[k],tau.g[k])
 					}
-          alpha ~ dgamma(0.001, 0.001)
+
 
           tau.u ~ dgamma(tau.ua, tau.ub)
           tau.v ~ dgamma(tau.va, tau.vb)
@@ -165,29 +171,43 @@ HurdleNB <- function(formula,iter.update=3, iter.mcmc=2000,
           a.var.u <- 1/tau.u
           a.var.v <- 1/tau.v
 
+          tau.ad ~ dgamma(tau.aa, tau.ab)
+          tau.bd ~ dgamma(tau.ba, tau.bb)
+
         }", file="hnb.txt")
 
       jags.m <- jags.model( file = "hnb.txt", data=dat, inits=inits, n.chains=1, n.adapt=500 )
       file.remove("hnb.txt")
-      params <- c("mu.exp","a.var.u","a.var.v","b","g","tau.u","tau.v","alpha")
+      params <- c("mu.exp","a.var.u","a.var.v","b","g","tau.u","tau.v","tau.ad","tau.bd")
       samps <- coda.samples( jags.m, params, n.iter=iter.mcmc, thin=thin)
       samps1 <- window(samps, start=burn.in+1, end=iter.mcmc)
       result_samps=summary(samps1)
+
       a.var.u = result_samps$statistics[1]
       a.var.v = result_samps$statistics[2]
-      alpha   = result_samps$statistics[3]
-      beta    = result_samps$statistics[4:(nvar+3),1:2]
-      gamma   = result_samps$statistics[(nvar+4):(2*nvar+3),1:2]
+
+      beta    = result_samps$statistics[3:(nvar+2),1:2]
+      gamma   = result_samps$statistics[(nvar+3):(2*nvar+2),1:2]
+
       for (i in 1:nvar){
         mu.b[i]  = beta[i,1]
         tau.b[i] = 1/(beta[i,2]^2)
         mu.g[i]  = gamma[i,1]
         tau.b[i] = 1/(gamma[i,2]^2)
       }
-      tau.ua = result_samps$statistics[4+2*nvar+n,1]^2/result_samps$statistics[4+2*nvar+n,2]^2
-      tau.ub = result_samps$statistics[4+2*nvar+n,1]/result_samps$statistics[4+2*nvar+n,2]^2
-      tau.va = result_samps$statistics[5+2*nvar+n,1]^2/result_samps$statistics[5+2*nvar+n,2]^2
-      tau.vb = result_samps$statistics[5+2*nvar+n,1]/result_samps$statistics[5+2*nvar+n,2]^2
+
+      tau.aa  = result_samps$statistics[2*nvar+n+3,1]^2/result_samps$statistics[2*nvar+n+3,2]^2
+      tau.ab  = result_samps$statistics[2*nvar+n+3,1]/result_samps$statistics[2*nvar+n+3,2]^2
+
+      tau.ba  = result_samps$statistics[2*nvar+n+4,1]^2/result_samps$statistics[2*nvar+n+4,2]^2
+      tau.bb  = result_samps$statistics[2*nvar+n+4,1]/result_samps$statistics[2*nvar+n+4,2]^2
+
+      tau.ua  = result_samps$statistics[2*nvar+n+5,1]^2/result_samps$statistics[2*nvar+n+5,2]^2
+      tau.ub  = result_samps$statistics[2*nvar+n+5,1]/result_samps$statistics[2*nvar+n+5,2]^2
+
+      tau.va  = result_samps$statistics[2*nvar+n+6,1]^2/result_samps$statistics[2*nvar+n+6,2]^2
+      tau.vb  = result_samps$statistics[2*nvar+n+6,1]/result_samps$statistics[2*nvar+n+6,2]^2
+
     }
     result_samps=summary(samps1)
 
@@ -200,32 +220,32 @@ HurdleNB <- function(formula,iter.update=3, iter.mcmc=2000,
       g.varnames[i] <- str_replace_all(paste("g[",idx.g.varnames,"]"),pattern=" ", replacement="")
     }
 
-    result_mcmc <- samps1[,c(4:(nvar+3))]
+    result_mcmc <- samps1[,c(3:(nvar+2))]
     colnames(result_mcmc[[1]]) <- b.varnames
 
-    result_mcmc1 <- samps1[,c((nvar+4):(2*nvar+3))]
+    result_mcmc1 <- samps1[,c((nvar+3):(2*nvar+2))]
     colnames(result_mcmc1[[1]]) <- g.varnames
 
     a.var.u = result_samps$statistics[1]
     a.var.v = result_samps$statistics[2]
     a.var   = rbind(a.var.u,a.var.v)
 
-    alpha = result_samps$statistics[3]
+    #alpha = result_samps$statistics[3]
 
-    beta = result_samps$statistics[4:(nvar+3),1:2]
+    beta = result_samps$statistics[3:(nvar+2),1:2]
     rownames(beta) <- b.varnames
 
-    gamma = result_samps$statistics[(nvar+4):(2*nvar+3),1:2]
+    gamma = result_samps$statistics[(nvar+3):(2*nvar+2),1:2]
     rownames(gamma) <- g.varnames
 
-    mu = result_samps$statistics[(2*nvar+4):(2*nvar+n+3),1:2]
+    mu = result_samps$statistics[(2*nvar+3):(2*nvar+n+2),1:2]
 
     Estimation = data.frame(mu)
 
-    Quantiles <- as.data.frame(result_samps$quantiles[1:(5+2*nvar+n),])
-    q_beta    <- Quantiles[4:(nvar+3),]
-    q_gamma   <- Quantiles[(nvar+4):(2*nvar+3),]
-    q_mu      <- Quantiles[(2*nvar+4):(2*nvar+n+3),]
+    Quantiles <- as.data.frame(result_samps$quantiles[1:(6+2*nvar+n),])
+    q_beta    <- Quantiles[3:(nvar+2),]
+    q_gamma   <- Quantiles[(nvar+3):(2*nvar+2),]
+    q_mu      <- Quantiles[(2*nvar+3):(2*nvar+n+2),]
 
     rownames(q_beta)  <- b.varnames
     rownames(q_gamma) <- g.varnames
@@ -250,7 +270,8 @@ HurdleNB <- function(formula,iter.update=3, iter.mcmc=2000,
     tau.ua = tau.ub = 1
     tau.va = tau.vb = 1
     a.var.u = a.var.v = 1
-    alpha = 1
+    tau.aa = tau.ab = 0.001
+    tau.ba = tau.bb = 0.001
 
     formuladata$idx <- rep(1:n)
     data_sampled    <- na.omit(formuladata)
@@ -261,61 +282,72 @@ HurdleNB <- function(formula,iter.update=3, iter.mcmc=2000,
     n2 = nrow(data_nonsampled)
 
     for (i in 1:iter.update){
-      dat <- list("n1"= n1, "n2"=n2,"nvar"=nvar,"zeros_sampled"=rep(0,n1), "y_sampled" = data_sampled[,1],
+      dat <- list("n1"= n1, "n2"=n2,"nvar"=nvar,"zeros_sampled"=rep(0,n1),
+                  "y_sampled" = data_sampled[,1],
                   "x_sampled"=as.matrix(data_sampled[,2:nvar]),
                   "x_nonsampled"=as.matrix(data_nonsampled[,2:nvar]),
                   "mu.b"=mu.b,"mu.g"=mu.g, "tau.b"=tau.b, "tau.g"=tau.g,
-                  "tau.ua"=tau.ua, "tau.ub"=tau.ub, "tau.va"=tau.va, "tau.vb"=tau.vb)
-      inits <- list(u = rep(0,n1), uT = rep(0,n2), v = rep(0,n1), vT = rep(0,n2), b = mu.b, g = mu.g, tau.u = tau.u, tau.v=tau.v, alpha=alpha)
+                  "tau.ua"=tau.ua, "tau.ub"=tau.ub, "tau.va"=tau.va, "tau.vb"=tau.vb,
+                  "tau.aa"=tau.aa,"tau.ab"=tau.ab,"tau.ba"=tau.ba,"tau.bb"=tau.bb)
+
+      inits <- list(u = rep(0,n1), uT = rep(0,n2), v = rep(0,n1), vT = rep(0,n2), b = mu.b, g = mu.g,
+                    tau.u = tau.u, tau.v=tau.v, tau.ad=0.001,tau.bd=0.001)
 
       cat("model{
        #Likelihood using zero trick
           for (i in 1:n1){
               zeros_sampled[i] ~ dpois(zeros.mean[i])
-              zeros.mean[i] <- -ll[i] + 10000
+              zeros.mean[i] <- -ll[i] + 100000000
               B[i] ~ dbern(phi[i])
 
-              logztnb[i] <- loggam(y_sampled[i]+1/alpha)
+              logztnb[i] <- loggam(y_sampled[i]+alpha[i])
                             - loggam(y_sampled[i]+1)
-                            - loggam(1/alpha)
-                            + y_sampled[i]*log(1-1/(1+alpha*mu[i]))
-                            + 1/alpha*log(1/(1+alpha*mu[i]))
-                            - log(1-(1+alpha*mu[i])^(-1/alpha))
+                            - loggam(alpha[i])
+                            + y_sampled[i]*(log(mu[i])-log(mu[i]+alpha[i]))
+                            + alpha[i]*(log(alpha[i])-log(mu[i]+alpha[i]))
+                            + log((1-(alpha[i]/(mu[i]+alpha[i]))^alpha[i])^(-1))
+
 
               z[i]  <- step(y_sampled[i] - 0.0001)
-              l1[i] <- (1 - z[i])*log(1-phi[i])
-              l2[i] <- z[i]*(log(phi[i]) + logztnb[i])
+              l1[i] <- (1 - z[i])*log(phi[i])
+              l2[i] <- z[i]*(log(1-phi[i]) + logztnb[i])
               ll[i] <- l1[i] + l2[i]
 
               #Model regresi
-              log(mu[i])    <- b[1] + sum(b[2:nvar]*x_sampled[i,]) + u[i]
+              log(mu[i])   <- b[1] + sum(b[2:nvar]*x_sampled[i,]) + u[i]
               logit(phi[i]) <- g[1] + sum(g[2:nvar]*x_sampled[i,]) + v[i]
 
-              mu.exp[i] <- mu[i]*phi[i]*(1-(1+alpha*mu[i])^(-1/alpha))
+              mu.exp[i] <- mu[i]*(1-phi[i])*(1-(alpha[i]/(mu[i]+alpha[i]))^alpha[i])^(-1)
 
               #Random effect area
               u[i] ~ dnorm(0,tau.u)
               v[i] ~ dnorm(0,tau.v)
+
+              alpha[i] ~ dgamma(tau.ad,tau.bd)
           }
 
           for (j in 1:n2){
+
               #Model regresi
+
               log(muT[j])    <- b[1] + sum(mu.b[2:nvar]*x_nonsampled[j,]) + uT[j]
               logit(phiT[j]) <- g[1] + sum(mu.g[2:nvar]*x_nonsampled[j,]) + vT[j]
 
-              mu.nonsampled[j] <- muT[j]*phiT[j]*(1-(1+alpha*muT[j])^(-1/alpha))
+              mu.nonsampled[j] <- muT[j]*(1-phiT[j])*(1-(alphaT[j]/(muT[j]+alphaT[j]))^alphaT[j])^(-1)
 
               #Random effect area
               uT[j] ~ dnorm(0,tau.u)
               vT[j] ~ dnorm(0,tau.v)
+
+              #dispersion params
+              alphaT[j] ~ dgamma(tau.ad, tau.bd)
           }
+
           #Priors
           for (k in 1:nvar){
 					    b[k] ~ dnorm(mu.b[k],tau.b[k])
 					    g[k] ~ dnorm(mu.g[k],tau.g[k])
-          }
-
-          alpha ~ dgamma(0.001, 0.001)
+					}
 
           tau.u ~ dgamma(tau.ua, tau.ub)
           tau.v ~ dgamma(tau.va, tau.vb)
@@ -323,11 +355,14 @@ HurdleNB <- function(formula,iter.update=3, iter.mcmc=2000,
           a.var.u <- 1/tau.u
           a.var.v <- 1/tau.v
 
+          tau.ad ~ dgamma(tau.aa,tau.ab)
+          tau.bd ~ dgamma(tau.ba,tau.bb)
+
         }", file="hnb.txt")
 
       jags.m <- jags.model( file = "hnb.txt", data=dat, inits=inits, n.chains=1, n.adapt=500 )
       file.remove("hnb.txt")
-      params <- c("mu.exp","mu.nonsampled","a.var.u","a.var.v","b","g","tau.u","tau.v","alpha")
+      params <- c("mu.exp","mu.nonsampled","a.var.u","a.var.v","b","g","tau.u","tau.v","tau.ad","tau.bd")
       samps  <- coda.samples( jags.m, params, n.iter=iter.mcmc, thin=thin)
       samps1 <- window(samps, start=burn.in+1, end=iter.mcmc)
       result_samps = summary(samps1)
@@ -335,10 +370,8 @@ HurdleNB <- function(formula,iter.update=3, iter.mcmc=2000,
       a.var.u = result_samps$statistics[1]
       a.var.v = result_samps$statistics[2]
 
-      alpha   = result_samps$statistics[3]
-
-      beta    = result_samps$statistics[4:(nvar+3),1:2]
-      gamma   = result_samps$statistics[nvar+4:(2*nvar+3),1:2]
+      beta    = result_samps$statistics[3:(nvar+2),1:2]
+      gamma   = result_samps$statistics[nvar+3:(2*nvar+2),1:2]
 
       for (i in 1:nvar){
         mu.b[i]  = beta[i,1]
@@ -347,11 +380,18 @@ HurdleNB <- function(formula,iter.update=3, iter.mcmc=2000,
         tau.b[i] = 1/(gamma[i,2]^2)
       }
 
-      tau.ua = result_samps$statistics[2*nvar+n+4,1]^2/result_samps$statistics[2*nvar+n+4,2]^2
-      tau.ub = result_samps$statistics[2*nvar+n+4,1]/result_samps$statistics[2*nvar+n+4,2]^2
+      tau.aa  = result_samps$statistics[2*nvar+n+3,1]^2/result_samps$statistics[2*nvar+n+3,2]^2
+      tau.ab  = result_samps$statistics[2*nvar+n+3,1]/result_samps$statistics[2*nvar+n+3,2]^2
 
-      tau.va = result_samps$statistics[2*nvar+n+5,1]^2/result_samps$statistics[2*nvar+n+5,2]^2
-      tau.vb = result_samps$statistics[2*nvar+n+5,1]/result_samps$statistics[2*nvar+n+5,2]^2
+      tau.ba  = result_samps$statistics[2*nvar+n+4,1]^2/result_samps$statistics[2*nvar+n+4,2]^2
+      tau.bb  = result_samps$statistics[2*nvar+n+4,1]/result_samps$statistics[2*nvar+n+4,2]^2
+
+      tau.ua  = result_samps$statistics[2*nvar+n+5,1]^2/result_samps$statistics[2*nvar+n+5,2]^2
+      tau.ub  = result_samps$statistics[2*nvar+n+5,1]/result_samps$statistics[2*nvar+n+5,2]^2
+
+      tau.va  = result_samps$statistics[2*nvar+n+6,1]^2/result_samps$statistics[2*nvar+n+6,2]^2
+      tau.vb  = result_samps$statistics[2*nvar+n+6,1]/result_samps$statistics[2*nvar+n+6,2]^2
+
     }
     result_samps = summary(samps1)
 
@@ -366,10 +406,10 @@ HurdleNB <- function(formula,iter.update=3, iter.mcmc=2000,
     }
 
     #beta and gamma for plot
-    result_mcmc <- samps1[,c(4 :(nvar+3))]
+    result_mcmc <- samps1[,c(3 :(nvar+2))]
     colnames(result_mcmc[[1]]) <- b.varnames
 
-    result_mcmc1 <- samps1[,c((4+nvar) :(2*nvar+3))]
+    result_mcmc1 <- samps1[,c((3+nvar) :(2*nvar+2))]
     colnames(result_mcmc1[[1]]) <- g.varnames
 
     #random effect area
@@ -378,17 +418,17 @@ HurdleNB <- function(formula,iter.update=3, iter.mcmc=2000,
     a.var   = as.data.frame(rbind(a.var.u, a.var.v))
 
     #dispersion params
-    alpha = result_samps$statistics[3]
+    #alpha = result_samps$statistics[3]
 
     #regression coef
-    beta  = result_samps$statistics[4:(nvar+3),1:2]
-    gamma = result_samps$statistics[(nvar+4):(2*nvar+3),1:2]
+    beta  = result_samps$statistics[3:(nvar+2),1:2]
+    gamma = result_samps$statistics[(nvar+3):(2*nvar+2),1:2]
     rownames(beta)  <- b.varnames
     rownames(gamma) <- g.varnames
 
     #estimation
-    mu            = result_samps$statistics[(2*nvar+4):(3+2*nvar+n1),1:2]
-    mu.nonsampled = result_samps$statistics[(4+2*nvar+n1):(3+2*nvar+n),1:2]
+    mu            = result_samps$statistics[(2*nvar+3):(2+2*nvar+n1),1:2]
+    mu.nonsampled = result_samps$statistics[(3+2*nvar+n1):(2+2*nvar+n),1:2]
 
     Estimation      = matrix(rep(0,n),n,2)
     Estimation[r,]  = mu.nonsampled
@@ -397,10 +437,10 @@ HurdleNB <- function(formula,iter.update=3, iter.mcmc=2000,
 
     #Quantiles
     Quantiles       <- as.data.frame(result_samps$quantiles)
-    q_beta          <- (Quantiles[4:(nvar+3),])
-    q_gamma         <- (Quantiles[(nvar+4):(2*nvar+3),])
-    q_mu            <- (Quantiles[(2*nvar+4):(2*nvar+3+n1),])
-    q_mu.nonsampled <- (Quantiles[(4+2*nvar+n1):(3+2*nvar+n),])
+    q_beta          <- (Quantiles[3:(nvar+2),])
+    q_gamma         <- (Quantiles[(nvar+3):(2*nvar+2),])
+    q_mu            <- (Quantiles[(2*nvar+3):(2*nvar+2+n1),])
+    q_mu.nonsampled <- (Quantiles[(3+2*nvar+n1):(2+2*nvar+n),])
     q_Estimation    <- matrix(0,n,5)
 
     for (i in 1:5){
@@ -427,6 +467,7 @@ HurdleNB <- function(formula,iter.update=3, iter.mcmc=2000,
                                      plot(result_mcmc,col="brown2",lwd=2),
                                      autocorr.plot(result_mcmc1,col="brown2",lwd=2),
                                      plot(result_mcmc1,col="brown2",lwd=2))
+
   return(result)
 
 }

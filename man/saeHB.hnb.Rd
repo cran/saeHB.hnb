@@ -27,7 +27,7 @@ Raka Ikmana, Azka Ubaidillah
    \item{Rao, J.N.K & Molina. (2015). Small Area Estimation 2nd Edition. New Jersey: John Wiley and Sons, Inc. <doi:10.1002/9781118735855>.}
    \item{Hilbe, J. M. (2011). Negative Binomial Regression 2nd Edition. New York : Cambridge University Press. <doi:10.1017/CBO9780511973420>.}
    \item{Ntzoufras, I. (2009). Bayesian Modelling Using WinBUGS. New Jersey :  John Wiley & Sons, Inc.}
-   \item{Andika, A., Abdullah, S., & Nurrohmah, S. (2019). "Hurdle Negative Binomial Regression Model". Proceeding of ICSA 2019, p: 57-68. <doi:10.29244/icsa.2019.pp57-68>.}
+
 }
 }
 
